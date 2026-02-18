@@ -1,0 +1,297 @@
+openapi: "3.1.0"
+
+info:
+  title: Contract Service API
+  version: "1.0.0"
+  description: |
+    Manages time slices for contracts with article IDs and invoice dates.
+
+    **Business logic:**
+    - The highest article ID that does not yet exist for the given contract is stored per request
+    - If the invoice date differs from existing entries, all existing time slices for that contract are updated
+
+servers:
+  - url: http://localhost:8080
+    description: Local development environment
+
+security:
+  - BearerAuth: []
+
+tags:
+  - name: time-slices
+    description: Time slices for contracts
+  - name: health
+    description: Kubernetes health checks (no auth required)
+
+paths:
+
+  /time-slices:
+    post:
+      summary: Create a time slice
+      description: Creates a new time slice for a contract.
+      tags: [time-slices]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/IncomingPayload"
+            example:
+              contract_id: "CONTRACT-42"
+              article_ids: [10, 99, 55, 201]
+              validity_tag: "2024-Q1"
+              invoice_date: "2024-03-31T00:00:00Z"
+      responses:
+        "201":
+          description: Time slice successfully created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+              example:
+                message: "time slice created"
+                time_slice_id: 7
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          description: All article IDs already exist for this contract
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "all provided article IDs already exist for this contract — no new time slice created"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /time-slices/{contract_id}:
+    get:
+      summary: Get time slices
+      description: Returns all time slices for a contract, sorted by creation date descending (newest first).
+      tags: [time-slices]
+      parameters:
+        - name: contract_id
+          in: path
+          required: true
+          description: Unique contract identifier
+          schema:
+            type: string
+          example: "CONTRACT-42"
+      responses:
+        "200":
+          description: List of time slices
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/TimeSlice"
+              example:
+                - id: 2
+                  contract_id: "CONTRACT-42"
+                  top_article_id: 201
+                  validity_tag: "2024-Q2"
+                  invoice_date: "2024-06-30T00:00:00Z"
+                  created_at: "2026-02-18T20:00:00Z"
+                - id: 1
+                  contract_id: "CONTRACT-42"
+                  top_article_id: 99
+                  validity_tag: "2024-Q1"
+                  invoice_date: "2024-06-30T00:00:00Z"
+                  created_at: "2026-02-18T19:00:00Z"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          description: No time slices found for this contract
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "no time slices found for contract_id: CONTRACT-42"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /health/live:
+    get:
+      summary: Liveness check
+      description: Checks whether the service process is running. Used by the Kubernetes livenessProbe.
+      tags: [health]
+      security: []
+      responses:
+        "200":
+          description: Service is running
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StatusResponse"
+              example:
+                status: "ok"
+
+  /health/ready:
+    get:
+      summary: Readiness check
+      description: Checks whether the service and database connection are ready. Used by the Kubernetes readinessProbe.
+      tags: [health]
+      security: []
+      responses:
+        "200":
+          description: Service and database are ready
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StatusResponse"
+              example:
+                status: "ready"
+        "503":
+          description: Database unreachable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StatusResponse"
+              example:
+                status: "unavailable"
+                reason: "database unreachable"
+
+components:
+
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: HS256-signed JWT. Format — "Bearer <token>"
+
+  schemas:
+    IncomingPayload:
+      type: object
+      required: [contract_id, article_ids, validity_tag, invoice_date]
+      properties:
+        contract_id:
+          type: string
+          description: Unique contract identifier
+          example: "CONTRACT-42"
+        article_ids:
+          type: array
+          items:
+            type: integer
+            format: int64
+          description: List of article IDs — the highest unknown ID will be stored
+          example: [10, 99, 55, 201]
+        validity_tag:
+          type: string
+          description: Validity tag for the time slice
+          example: "2024-Q1"
+        invoice_date:
+          type: string
+          format: date-time
+          description: Invoice date (ISO 8601)
+          example: "2024-03-31T00:00:00Z"
+
+    TimeSlice:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+          example: 1
+        contract_id:
+          type: string
+          example: "CONTRACT-42"
+        top_article_id:
+          type: integer
+          format: int64
+          description: Highest article ID that was new at the time of creation
+          example: 201
+        validity_tag:
+          type: string
+          example: "2024-Q1"
+        invoice_date:
+          type: string
+          format: date-time
+          example: "2024-03-31T00:00:00Z"
+        created_at:
+          type: string
+          format: date-time
+          example: "2026-02-18T19:00:00Z"
+
+    SuccessResponse:
+      type: object
+      properties:
+        message:
+          type: string
+          example: "time slice created"
+        time_slice_id:
+          type: integer
+          format: int64
+          example: 7
+
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+          example: "contract_id is required"
+
+    StatusResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          example: "ok"
+        reason:
+          type: string
+          description: Only set on error
+          example: "database unreachable"
+
+  responses:
+    BadRequest:
+      description: Invalid JSON body
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            error: "invalid JSON payload"
+    Unauthorized:
+      description: Missing or expired token
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            error: "token expired"
+    Forbidden:
+      description: Invalid token signature
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            error: "invalid token signature"
+    UnprocessableEntity:
+      description: Validation error — required field missing
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            error: "contract_id is required"
+    InternalServerError:
+      description: Internal server error
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            error: "could not persist time slice"
